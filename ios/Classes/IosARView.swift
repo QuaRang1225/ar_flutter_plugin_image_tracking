@@ -15,16 +15,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     var customPlaneTexturePath: String? = nil
     private var trackedPlanes = [UUID: (SCNNode, SCNNode)]()
     let modelBuilder = ArModelBuilder()
-    
+
     var cancellableCollection = Set<AnyCancellable>() //Used to store all cancellables in (needed for working with Futures)
     var anchorCollection = [String: ARAnchor]() //Used to bookkeep all anchors created by Flutter calls
-    
+
     private var cloudAnchorHandler: CloudAnchorHandler? = nil
     private var arcoreSession: GARSession? = nil
     private var arcoreMode: Bool = false
     private var configuration: ARWorldTrackingConfiguration!
     private var tappedPlaneAnchorAlignment = ARPlaneAnchor.Alignment.horizontal // default alignment
-    
+
     private var panStartLocation: CGPoint?
     private var panCurrentLocation: CGPoint?
     private var panCurrentVelocity: CGPoint?
@@ -43,7 +43,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     ) {
         self.sceneView = ARSCNView(frame: frame)
         self.coachingView = ARCoachingOverlayView(frame: frame)
-        
+
         self.sessionManagerChannel = FlutterMethodChannel(name: "arsession_\(viewId)", binaryMessenger: messenger)
         self.objectManagerChannel = FlutterMethodChannel(name: "arobjects_\(viewId)", binaryMessenger: messenger)
         self.anchorManagerChannel = FlutterMethodChannel(name: "aranchors_\(viewId)", binaryMessenger: messenger)
@@ -65,165 +65,165 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     }
 
     func onDispose(_ result:FlutterResult) {
-                sceneView.session.pause()
-                self.sessionManagerChannel.setMethodCallHandler(nil)
-                self.objectManagerChannel.setMethodCallHandler(nil)
-                self.anchorManagerChannel.setMethodCallHandler(nil)
-                result(nil)
-            }
+        sceneView.session.pause()
+        self.sessionManagerChannel.setMethodCallHandler(nil)
+        self.objectManagerChannel.setMethodCallHandler(nil)
+        self.anchorManagerChannel.setMethodCallHandler(nil)
+        result(nil)
+    }
 
     func onSessionMethodCalled(_ call :FlutterMethodCall, _ result:FlutterResult) {
         let arguments = call.arguments as? Dictionary<String, Any>
 
         switch call.method {
-            case "init":
-                //self.sessionManagerChannel.invokeMethod("onError", arguments: ["SessionTEST from iOS"])
-                //result(nil)
-                initializeARView(arguments: arguments!, result: result)
-                break
-            case "getCameraPose":
-                if let cameraPose = sceneView.session.currentFrame?.camera.transform {
-                    result(serializeMatrix(cameraPose))
-                } else {
-                    result(FlutterError())
-                }
-                break
-            case "getAnchorPose":
+        case "init":
+            //self.sessionManagerChannel.invokeMethod("onError", arguments: ["SessionTEST from iOS"])
+            //result(nil)
+            initializeARView(arguments: arguments!, result: result)
+            break
+        case "getCameraPose":
+            if let cameraPose = sceneView.session.currentFrame?.camera.transform {
+                result(serializeMatrix(cameraPose))
+            } else {
+                result(FlutterError())
+            }
+            break
+        case "getAnchorPose":
             if let cameraPose = anchorCollection[arguments?["anchorId"] as! String]?.transform {
-                    result(serializeMatrix(cameraPose))
-                } else {
-                    result(FlutterError())
-                }
-                break
-            case "snapshot":
-                // call the SCNView Snapshot method and return the Image
-                let snapshotImage = sceneView.snapshot()
-                if let bytes = snapshotImage.pngData() {
-                    let data = FlutterStandardTypedData(bytes:bytes)
-                    result(data)
-                } else {
-                    result(nil)
-                }
-            case "dispose":
-                onDispose(result)
+                result(serializeMatrix(cameraPose))
+            } else {
+                result(FlutterError())
+            }
+            break
+        case "snapshot":
+            // call the SCNView Snapshot method and return the Image
+            let snapshotImage = sceneView.snapshot()
+            if let bytes = snapshotImage.pngData() {
+                let data = FlutterStandardTypedData(bytes:bytes)
+                result(data)
+            } else {
                 result(nil)
-                break
-            default:
-                result(FlutterMethodNotImplemented)
-                break
+            }
+        case "dispose":
+            onDispose(result)
+            result(nil)
+            break
+        default:
+            result(FlutterMethodNotImplemented)
+            break
         }
     }
 
     func onObjectMethodCalled(_ call :FlutterMethodCall, _ result: @escaping FlutterResult) {
         let arguments = call.arguments as? Dictionary<String, Any>
-          
+
         switch call.method {
-            case "init":
-                self.objectManagerChannel.invokeMethod("onError", arguments: ["ObjectTEST from iOS"])
+        case "init":
+            self.objectManagerChannel.invokeMethod("onError", arguments: ["ObjectTEST from iOS"])
+            result(nil)
+            break
+        case "addNode":
+            addNode(dict_node: arguments!).sink(receiveCompletion: {completion in }, receiveValue: { val in
+                result(val)
+            }).store(in: &self.cancellableCollection)
+            break
+        case "addNodeToPlaneAnchor":
+            if let dict_node = arguments!["node"] as? Dictionary<String, Any>, let dict_anchor = arguments!["anchor"] as? Dictionary<String, Any> {
+                addNode(dict_node: dict_node, dict_anchor: dict_anchor).sink(receiveCompletion: {completion in }, receiveValue: { val in
+                    result(val)
+                }).store(in: &self.cancellableCollection)
+            }
+            break
+        case "removeNode":
+            if let name = arguments!["name"] as? String {
+                sceneView.scene.rootNode.childNode(withName: name, recursively: true)?.removeFromParentNode()
+            }
+            break
+        case "transformationChanged":
+            if let name = arguments!["name"] as? String, let transform = arguments!["transformation"] as? Array<NSNumber> {
+                transformNode(name: name, transform: transform)
                 result(nil)
-                break
-            case "addNode":
-                addNode(dict_node: arguments!).sink(receiveCompletion: {completion in }, receiveValue: { val in
-                       result(val)
-                    }).store(in: &self.cancellableCollection)
-                break
-            case "addNodeToPlaneAnchor":
-                if let dict_node = arguments!["node"] as? Dictionary<String, Any>, let dict_anchor = arguments!["anchor"] as? Dictionary<String, Any> {
-                    addNode(dict_node: dict_node, dict_anchor: dict_anchor).sink(receiveCompletion: {completion in }, receiveValue: { val in
-                           result(val)
-                        }).store(in: &self.cancellableCollection)
-                }
-                break
-            case "removeNode":
-                if let name = arguments!["name"] as? String {
-                    sceneView.scene.rootNode.childNode(withName: name, recursively: true)?.removeFromParentNode()
-                }
-                break
-            case "transformationChanged":
-                if let name = arguments!["name"] as? String, let transform = arguments!["transformation"] as? Array<NSNumber> {
-                    transformNode(name: name, transform: transform)
-                    result(nil)
-                }
-                break
-            default:
-                result(FlutterMethodNotImplemented)
-                break
+            }
+            break
+        default:
+            result(FlutterMethodNotImplemented)
+            break
         }
     }
 
     func onAnchorMethodCalled(_ call :FlutterMethodCall, _ result: @escaping FlutterResult) {
         let arguments = call.arguments as? Dictionary<String, Any>
-          
-        switch call.method {
-            case "init":
-                self.objectManagerChannel.invokeMethod("onError", arguments: ["ObjectTEST from iOS"])
-                result(nil)
-                break
-            case "addAnchor":
-                if let type = arguments!["type"] as? Int {
-                    switch type {
-                    case 0: //Plane Anchor
-                        if let transform = arguments!["transformation"] as? Array<NSNumber>, let name = arguments!["name"] as? String {
-                            addPlaneAnchor(transform: transform, name: name)
-                            result(true)
-                        }
-                        result(false)
-                        break
-                    default:
-                        result(false)
-                    
-                    }
-                }
-                result(nil)
-                break
-            case "removeAnchor":
-                if let name = arguments!["name"] as? String {
-                    deleteAnchor(anchorName: name)
-                }
-                break
-            case "initGoogleCloudAnchorMode":
-                arcoreSession = try! GARSession.session()
 
-                if (arcoreSession != nil){
-                    let configuration = GARSessionConfiguration();
-                    configuration.cloudAnchorMode = .enabled;
-                    arcoreSession?.setConfiguration(configuration, error: nil);
-                    if let token = JWTGenerator().generateWebToken(){
-                        arcoreSession!.setAuthToken(token)
-                        
-                        cloudAnchorHandler = CloudAnchorHandler(session: arcoreSession!)
-                        arcoreSession!.delegate = cloudAnchorHandler
-                        arcoreSession!.delegateQueue = DispatchQueue.main
-                        
-                        arcoreMode = true
-                    } else {
-                        sessionManagerChannel.invokeMethod("onError", arguments: ["Error generating JWT, have you added cloudAnchorKey.json into the example/ios/Runner directory?"])
+        switch call.method {
+        case "init":
+            self.objectManagerChannel.invokeMethod("onError", arguments: ["ObjectTEST from iOS"])
+            result(nil)
+            break
+        case "addAnchor":
+            if let type = arguments!["type"] as? Int {
+                switch type {
+                case 0: //Plane Anchor
+                    if let transform = arguments!["transformation"] as? Array<NSNumber>, let name = arguments!["name"] as? String {
+                        addPlaneAnchor(transform: transform, name: name)
+                        result(true)
                     }
+                    result(false)
+                    break
+                default:
+                    result(false)
+
+                }
+            }
+            result(nil)
+            break
+        case "removeAnchor":
+            if let name = arguments!["name"] as? String {
+                deleteAnchor(anchorName: name)
+            }
+            break
+        case "initGoogleCloudAnchorMode":
+            arcoreSession = try! GARSession.session()
+
+            if (arcoreSession != nil){
+                let configuration = GARSessionConfiguration();
+                configuration.cloudAnchorMode = .enabled;
+                arcoreSession?.setConfiguration(configuration, error: nil);
+                if let token = JWTGenerator().generateWebToken(){
+                    arcoreSession!.setAuthToken(token)
+
+                    cloudAnchorHandler = CloudAnchorHandler(session: arcoreSession!)
+                    arcoreSession!.delegate = cloudAnchorHandler
+                    arcoreSession!.delegateQueue = DispatchQueue.main
+
+                    arcoreMode = true
                 } else {
-                    sessionManagerChannel.invokeMethod("onError", arguments: ["Error initializing Google AR Session"])
+                    sessionManagerChannel.invokeMethod("onError", arguments: ["Error generating JWT, have you added cloudAnchorKey.json into the example/ios/Runner directory?"])
                 }
-                    
-                break
-            case "uploadAnchor":
-                if let anchorName = arguments!["name"] as? String, let anchor = anchorCollection[anchorName] {
-                    print("---------------- HOSTING INITIATED ------------------")
-                    if let ttl = arguments!["ttl"] as? Int {
-                        cloudAnchorHandler?.hostCloudAnchorWithTtl(anchorName: anchorName, anchor: anchor, listener: cloudAnchorUploadedListener(parent: self), ttl: ttl)
-                    } else {
-                        cloudAnchorHandler?.hostCloudAnchor(anchorName: anchorName, anchor: anchor, listener: cloudAnchorUploadedListener(parent: self))
-                    }
+            } else {
+                sessionManagerChannel.invokeMethod("onError", arguments: ["Error initializing Google AR Session"])
+            }
+
+            break
+        case "uploadAnchor":
+            if let anchorName = arguments!["name"] as? String, let anchor = anchorCollection[anchorName] {
+                print("---------------- HOSTING INITIATED ------------------")
+                if let ttl = arguments!["ttl"] as? Int {
+                    cloudAnchorHandler?.hostCloudAnchorWithTtl(anchorName: anchorName, anchor: anchor, listener: cloudAnchorUploadedListener(parent: self), ttl: ttl)
+                } else {
+                    cloudAnchorHandler?.hostCloudAnchor(anchorName: anchorName, anchor: anchor, listener: cloudAnchorUploadedListener(parent: self))
                 }
-                result(true)
-                break
-            case "downloadAnchor":
-                if let anchorId = arguments!["cloudanchorid"] as? String {
-                    print("---------------- RESOLVING INITIATED ------------------")
-                    cloudAnchorHandler?.resolveCloudAnchor(anchorId: anchorId, listener: cloudAnchorDownloadedListener(parent: self))
-                }
-                break
-            default:
-                result(FlutterMethodNotImplemented)
-                break
+            }
+            result(true)
+            break
+        case "downloadAnchor":
+            if let anchorId = arguments!["cloudanchorid"] as? String {
+                print("---------------- RESOLVING INITIATED ------------------")
+                cloudAnchorHandler?.resolveCloudAnchor(anchorId: anchorId, listener: cloudAnchorDownloadedListener(parent: self))
+            }
+            break
+        default:
+            result(FlutterMethodNotImplemented)
+            break
         }
     }
 
@@ -233,19 +233,19 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         self.configuration.environmentTexturing = .automatic
         if let planeDetectionConfig = arguments["planeDetectionConfig"] as? Int {
             switch planeDetectionConfig {
-                case 1: 
-                    configuration.planeDetection = .horizontal
-                
-                case 2: 
-                    if #available(iOS 11.3, *) {
-                        configuration.planeDetection = .vertical
-                    }
-                case 3: 
-                    if #available(iOS 11.3, *) {
-                        configuration.planeDetection = [.horizontal, .vertical]
-                    }
-                default: 
-                    configuration.planeDetection = []
+            case 1:
+                configuration.planeDetection = .horizontal
+
+            case 2:
+                if #available(iOS 11.3, *) {
+                    configuration.planeDetection = .vertical
+                }
+            case 3:
+                if #available(iOS 11.3, *) {
+                    configuration.planeDetection = [.horizontal, .vertical]
+                }
+            default:
+                configuration.planeDetection = []
             }
         }
 
@@ -281,7 +281,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             }
         }
         self.sceneView.debugOptions = ARSCNDebugOptions(rawValue: debugOptions)
-        
+
         if let configHandleTaps = arguments["handleTaps"] as? Bool {
             if (configHandleTaps){
                 let tapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -298,7 +298,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 self.sceneView.gestureRecognizers?.append(panGestureRecognizer)
             }
         }
-        
+
         if let configHandleRotation = arguments["handleRotation"] as? Bool {
             if (configHandleRotation){
                 let rotationGestureRecognizer = UIRotationGestureRecognizer(target: self, action: #selector(handleRotation(_:)))
@@ -306,16 +306,16 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 self.sceneView.gestureRecognizers?.append(rotationGestureRecognizer)
             }
         }
-        
+
         // Add coaching view
         if let configShowAnimatedGuide = arguments["showAnimatedGuide"] as? Bool {
             if configShowAnimatedGuide {
                 if self.sceneView.superview != nil && self.coachingView.superview == nil {
                     self.sceneView.addSubview(self.coachingView)
-        //            self.coachingView.translatesAutoresizingMaskIntoConstraints = false
+                    //            self.coachingView.translatesAutoresizingMaskIntoConstraints = false
                     self.coachingView.autoresizingMask = [
-                          .flexibleWidth, .flexibleHeight
-                        ]
+                        .flexibleWidth, .flexibleHeight
+                    ]
                     self.coachingView.session = self.sceneView.session
                     self.coachingView.activatesAutomatically = true
                     if configuration.planeDetection == .horizontal {
@@ -327,28 +327,28 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                     /**
                      Terminating app due to uncaught exception 'NSGenericException', reason: 'Unable to activate constraint with anchors <NSLayoutXAxisAnchor:0x28342dec0 "ARCoachingOverlayView:0x13a470ae0.centerX"> and <NSLayoutXAxisAnchor:0x28342c680 "FlutterTouchInterceptingView:0x10bad1c90.centerX"> because they have no common ancestor.  Does the constraint or its anchors reference items in different view hierarchies?  That's illegal.'
                      */
-        //            NSLayoutConstraint.activate([
-        //                self.coachingView.centerXAnchor.constraint(equalTo: self.sceneView.superview!.centerXAnchor),
-        //                self.coachingView.centerYAnchor.constraint(equalTo: self.sceneView.superview!.centerYAnchor),
-        //                self.coachingView.widthAnchor.constraint(equalTo: self.sceneView.superview!.widthAnchor),
-        //                self.coachingView.heightAnchor.constraint(equalTo: self.sceneView.superview!.heightAnchor)
-        //                ])
+                    //            NSLayoutConstraint.activate([
+                    //                self.coachingView.centerXAnchor.constraint(equalTo: self.sceneView.superview!.centerXAnchor),
+                    //                self.coachingView.centerYAnchor.constraint(equalTo: self.sceneView.superview!.centerYAnchor),
+                    //                self.coachingView.widthAnchor.constraint(equalTo: self.sceneView.superview!.widthAnchor),
+                    //                self.coachingView.heightAnchor.constraint(equalTo: self.sceneView.superview!.heightAnchor)
+                    //                ])
                 }
             }
         }
-    
+
         // Configure image tracking
         if let trackingImagePaths = arguments["trackingImagePaths"] as? [String] {
             setupImageTracking(imagePaths: trackingImagePaths)
         }
-    
+
         // Update session configuration
         self.sceneView.session.run(configuration)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         print("📍 iOS didAdd anchor: \(type(of: anchor))")
-        
+
         if let planeAnchor = anchor as? ARPlaneAnchor{
             let plane = modelBuilder.makePlane(anchor: planeAnchor, flutterAssetFile: customPlaneTexturePath)
             trackedPlanes[anchor.identifier] = (node, plane)
@@ -356,7 +356,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                 node.addChildNode(plane)
             }
         }
-        
+
         // Handle image anchors
         if let imageAnchor = anchor as? ARImageAnchor {
             print("🖼️ iOS: Image anchor added!")
@@ -365,7 +365,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        
+
         if let planeAnchor = anchor as? ARPlaneAnchor, let plane = trackedPlanes[anchor.identifier] {
             modelBuilder.updatePlaneNode(planeNode: plane.1, anchor: planeAnchor)
         }
@@ -374,7 +374,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
         trackedPlanes.removeValue(forKey: anchor.identifier)
     }
-    
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         if (arcoreMode) {
             do {
@@ -388,156 +388,89 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     func addNode(dict_node: Dictionary<String, Any>, dict_anchor: Dictionary<String, Any>? = nil) -> Future<Bool, Never> {
 
         return Future {promise in
-            
-            switch (dict_node["type"] as! Int) {
-                case 0: // GLTF2 Model from Flutter asset folder
-                    // Get path to given Flutter asset
-                    let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
-                    // Add object to scene
-                    if let node: SCNNode = self.modelBuilder.makeNodeFromGltf(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
-                            switch anchorType{
-                                case 0: //PlaneAnchor
-                                    if let anchor = self.anchorCollection[anchorName]{
-                                        // Attach node to the top-level node of the specified anchor
-                                        self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
-                                    } else {
-                                        promise(.success(false))
-                                    }
-                                default:
-                                    promise(.success(false))
-                                }
-                            
-                        } else {
-                            // Attach to top-level node of the scene
-                            self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
-                        }
-                        promise(.success(false))
-                    } else {
-                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
-                        promise(.success(false))
-                    }
-                    break
-                case 1: // GLB Model from Flutter asset folder
-                    // Get path to given Flutter asset
-                    let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
-                    // Add object to scene
-                    if let node: SCNNode = self.modelBuilder.makeNodeFromGLB(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
-                            switch anchorType{
-                                case 0: //PlaneAnchor
-                                    if let anchor = self.anchorCollection[anchorName]{
-                                        // Attach node to the top-level node of the specified anchor
-                                        self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
-                                    } else {
-                                        promise(.success(false))
-                                    }
-                                default:
-                                    promise(.success(false))
-                                }
-                            
-                        } else {
-                            // Attach to top-level node of the scene
-                            self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
-                        }
-                        promise(.success(false))
-                    } else {
-                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
-                        promise(.success(false))
-                    }
-                    break
-                case 2: // GLB Model from the web
-                    // Add object to scene
-                    self.modelBuilder.makeNodeFromWebGlb(name: dict_node["name"] as! String, modelURL: dict_node["uri"] as! String, transformation: dict_node["transformation"] as? Array<NSNumber>)
-                    .sink(receiveCompletion: {
-                                    completion in print("Async Model Downloading Task completed: ", completion)
-                    }, receiveValue: { val in
-                        if let node: SCNNode = val {
-                            if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
-                                switch anchorType{
-                                    case 0: //PlaneAnchor
-                                        if let anchor = self.anchorCollection[anchorName]{
-                                            // Attach node to the top-level node of the specified anchor
-                                            self.sceneView.node(for: anchor)?.addChildNode(node)
-                                            promise(.success(true))
-                                        } else {
-                                            promise(.success(false))
-                                        }
-                                    default:
-                                        promise(.success(false))
-                                    }
-                                
-                            } else {
-                                // Attach to top-level node of the scene
-                                self.sceneView.scene.rootNode.addChildNode(node)
-                                promise(.success(true))
-                            }
-                            promise(.success(false))
-                        } else {
-                            self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["name"] as! String)"])
-                            promise(.success(false))
-                        }
-                    }).store(in: &self.cancellableCollection)
-                    break
-                case 3: // GLB Model from the app's documents folder
-                    // Get path to given file system asset
-                    let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-                    let documentsDirectory = paths[0]
-                    let targetPath = documentsDirectory.appendingPathComponent(dict_node["uri"] as! String).path
- 
-                    // Add object to scene
-                    if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGLB(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
-                        if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
-                            switch anchorType{
-                                case 0: //PlaneAnchor
-                                    if let anchor = self.anchorCollection[anchorName]{
-                                        // Attach node to the top-level node of the specified anchor
-                                        self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
-                                    } else {
-                                        promise(.success(false))
-                                    }
-                                default:
-                                    promise(.success(false))
-                                }
-                            
-                        } else {
-                            // Attach to top-level node of the scene
-                            self.sceneView.scene.rootNode.addChildNode(node)
-                            promise(.success(true))
-                        }
-                        promise(.success(false))
-                    } else {
-                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
-                        promise(.success(false))
-                    }
-                    break
-                case 4: //fileSystemAppFolderGLTF2
-                    // Get path to given file system asset
-                    let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-                    let documentsDirectory = paths[0]
-                    let targetPath = documentsDirectory.appendingPathComponent(dict_node["uri"] as! String).path
 
-                    // Add object to scene
-                    if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGltf(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+            switch (dict_node["type"] as! Int) {
+            case 0: // GLTF2 Model from Flutter asset folder
+                // Get path to given Flutter asset
+                let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
+                // Add object to scene
+                if let node: SCNNode = self.modelBuilder.makeNodeFromGltf(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                    if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
+                        switch anchorType{
+                        case 0: //PlaneAnchor
+                            if let anchor = self.anchorCollection[anchorName]{
+                                // Attach node to the top-level node of the specified anchor
+                                self.sceneView.node(for: anchor)?.addChildNode(node)
+                                promise(.success(true))
+                            } else {
+                                promise(.success(false))
+                            }
+                        default:
+                            promise(.success(false))
+                        }
+
+                    } else {
+                        // Attach to top-level node of the scene
+                        self.sceneView.scene.rootNode.addChildNode(node)
+                        promise(.success(true))
+                    }
+                    promise(.success(false))
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            case 1: // GLB Model from Flutter asset folder
+                // Get path to given Flutter asset
+                let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
+                // Add object to scene
+                if let node: SCNNode = self.modelBuilder.makeNodeFromGLB(name: dict_node["name"] as! String, modelPath: key, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                    if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
+                        switch anchorType{
+                        case 0: //PlaneAnchor
+                            if let anchor = self.anchorCollection[anchorName]{
+                                // Attach node to the top-level node of the specified anchor
+                                self.sceneView.node(for: anchor)?.addChildNode(node)
+                                promise(.success(true))
+                            } else {
+                                promise(.success(false))
+                            }
+                        default:
+                            promise(.success(false))
+                        }
+
+                    } else {
+                        // Attach to top-level node of the scene
+                        self.sceneView.scene.rootNode.addChildNode(node)
+                        promise(.success(true))
+                    }
+                    promise(.success(false))
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            case 2: // GLB Model from the web
+                // Add object to scene
+                self.modelBuilder.makeNodeFromWebGlb(name: dict_node["name"] as! String, modelURL: dict_node["uri"] as! String, transformation: dict_node["transformation"] as? Array<NSNumber>)
+                .sink(receiveCompletion: {
+                    completion in print("Async Model Downloading Task completed: ", completion)
+                }, receiveValue: { val in
+                    if let node: SCNNode = val {
                         if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
                             switch anchorType{
-                                case 0: //PlaneAnchor
-                                    if let anchor = self.anchorCollection[anchorName]{
-                                        // Attach node to the top-level node of the specified anchor
-                                        self.sceneView.node(for: anchor)?.addChildNode(node)
-                                        promise(.success(true))
-                                    } else {
-                                        promise(.success(false))
-                                    }
-                                default:
+                            case 0: //PlaneAnchor
+                                if let anchor = self.anchorCollection[anchorName]{
+                                    // Attach node to the top-level node of the specified anchor
+                                    self.sceneView.node(for: anchor)?.addChildNode(node)
+                                    promise(.success(true))
+                                } else {
                                     promise(.success(false))
                                 }
-                            
+                            default:
+                                promise(.success(false))
+                            }
+
                         } else {
                             // Attach to top-level node of the scene
                             self.sceneView.scene.rootNode.addChildNode(node)
@@ -545,50 +478,257 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
                         }
                         promise(.success(false))
                     } else {
-                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
+                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["name"] as! String)"])
                         promise(.success(false))
                     }
-                    break
-                default:
+                }).store(in: &self.cancellableCollection)
+                break
+            case 3: // GLB Model from the app's documents folder
+                // Get path to given file system asset
+                let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                let documentsDirectory = paths[0]
+                let targetPath = documentsDirectory.appendingPathComponent(dict_node["uri"] as! String).path
+
+                // Add object to scene
+                if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGLB(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                    if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
+                        switch anchorType{
+                        case 0: //PlaneAnchor
+                            if let anchor = self.anchorCollection[anchorName]{
+                                // Attach node to the top-level node of the specified anchor
+                                self.sceneView.node(for: anchor)?.addChildNode(node)
+                                promise(.success(true))
+                            } else {
+                                promise(.success(false))
+                            }
+                        default:
+                            promise(.success(false))
+                        }
+
+                    } else {
+                        // Attach to top-level node of the scene
+                        self.sceneView.scene.rootNode.addChildNode(node)
+                        promise(.success(true))
+                    }
                     promise(.success(false))
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            case 4: //fileSystemAppFolderGLTF2
+                // Get path to given file system asset
+                let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+                let documentsDirectory = paths[0]
+                let targetPath = documentsDirectory.appendingPathComponent(dict_node["uri"] as! String).path
+
+                // Add object to scene
+                if let node: SCNNode = self.modelBuilder.makeNodeFromFileSystemGltf(name: dict_node["name"] as! String, modelPath: targetPath, transformation: dict_node["transformation"] as? Array<NSNumber>) {
+                    if let anchorName = dict_anchor?["name"] as? String, let anchorType = dict_anchor?["type"] as? Int {
+                        switch anchorType{
+                        case 0: //PlaneAnchor
+                            if let anchor = self.anchorCollection[anchorName]{
+                                // Attach node to the top-level node of the specified anchor
+                                self.sceneView.node(for: anchor)?.addChildNode(node)
+                                promise(.success(true))
+                            } else {
+                                promise(.success(false))
+                            }
+                        default:
+                            promise(.success(false))
+                        }
+
+                    } else {
+                        // Attach to top-level node of the scene
+                        self.sceneView.scene.rootNode.addChildNode(node)
+                        promise(.success(true))
+                    }
+                    promise(.success(false))
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError", arguments: ["Unable to load renderable \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            case 5: // USDZ Model from Flutter asset folder
+                let key = FlutterDartProject.lookupKey(forAsset: dict_node["uri"] as! String)
+                let path = Bundle.main.path(forResource: key, ofType: nil)
+
+                if let path {
+                    let url = URL(fileURLWithPath: path)
+                    do {
+                        let scene = try SCNScene(url: url, options: nil)
+                        let node = SCNNode()
+                        for child in scene.rootNode.childNodes {
+                            node.addChildNode(child)
+                        }
+                        node.name = dict_node["name"] as? String
+                        node.transform = deserializeMatrix4(dict_node["transformation"] as? [NSNumber] ?? [])
+                        if let scaleArray = dict_node["scale"] as? [NSNumber], scaleArray.count == 3 {
+                            node.scale = SCNVector3(
+                                scaleArray[0].floatValue,
+                                scaleArray[1].floatValue,
+                                scaleArray[2].floatValue
+                            )
+                        } else {
+                            node.scale = SCNVector3(0.01, 0.01, 0.01)
+                        }
+
+                        // ✅ anchor에 연결 시도
+                        if let anchorName = dict_anchor?["name"] as? String,
+                           let anchorType = dict_anchor?["type"] as? Int,
+                           anchorType == 0,
+                           let anchor = self.anchorCollection[anchorName] {
+                            self.sceneView.node(for: anchor)?.addChildNode(node)
+                        } else {
+                            self.sceneView.scene.rootNode.addChildNode(node)
+                        }
+
+                        promise(.success(true))
+                    } catch {
+                        self.sessionManagerChannel.invokeMethod("onError", arguments: ["Failed to load USDZ model: \(error.localizedDescription)"])
+                        promise(.success(false))
+                    }
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError", arguments: ["USDZ file not found: \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            case 6: // Web GLTF2 Model (simple fallback using GLB loader if GLTF loader is unavailable)
+                // NOTE: This plugin does not provide a native GLTF web loader.
+                // As a fallback, try loading as GLB via URL if the server provides GLB instead.
+                // You may replace this with a custom GLTF loader if needed.
+                self.modelBuilder.makeNodeFromWebGlb(
+                    name: dict_node["name"] as! String,
+                    modelURL: dict_node["uri"] as! String,
+                    transformation: dict_node["transformation"] as? Array<NSNumber>
+                )
+                .sink(receiveCompletion: { completion in
+                    print("Web GLTF2 fallback load completed: ", completion)
+                }, receiveValue: { val in
+                    if let node: SCNNode = val {
+                        if let anchorName = dict_anchor?["name"] as? String,
+                           let anchorType = dict_anchor?["type"] as? Int,
+                           anchorType == 0,
+                           let anchor = self.anchorCollection[anchorName] {
+                            self.sceneView.node(for: anchor)?.addChildNode(node)
+                            promise(.success(true))
+                        } else {
+                            self.sceneView.scene.rootNode.addChildNode(node)
+                            promise(.success(true))
+                        }
+                        promise(.success(false))
+                    } else {
+                        self.sessionManagerChannel.invokeMethod("onError",
+                                                                arguments: ["Unable to load web GLTF2 model \(dict_node["uri"] as! String)"])
+                        promise(.success(false))
+                    }
+                }).store(in: &self.cancellableCollection)
+                break
+
+            case 7: // Web USDZ Model
+                if let url = URL(string: dict_node["uri"] as! String) {
+                    do {
+                        let scene = try SCNScene(url: url, options: nil)
+                        let node = SCNNode()
+                        for child in scene.rootNode.childNodes {
+                            node.addChildNode(child)
+                        }
+                        node.name = dict_node["name"] as? String
+                        node.transform = deserializeMatrix4(dict_node["transformation"] as? [NSNumber] ?? [])
+
+                        // Apply scale if provided
+                        if let scaleArray = dict_node["scale"] as? [NSNumber],
+                           scaleArray.count == 3 {
+                            node.scale = SCNVector3(
+                                scaleArray[0].floatValue,
+                                scaleArray[1].floatValue,
+                                scaleArray[2].floatValue
+                            )
+                        } else {
+                            node.scale = SCNVector3(0.01, 0.01, 0.01)
+                        }
+
+                        // Attach to anchor or root
+                        if let anchorName = dict_anchor?["name"] as? String,
+                           let anchorType = dict_anchor?["type"] as? Int,
+                           anchorType == 0,
+                           let anchor = self.anchorCollection[anchorName] {
+                            self.sceneView.node(for: anchor)?.addChildNode(node)
+                        } else {
+                            self.sceneView.scene.rootNode.addChildNode(node)
+                        }
+
+                        promise(.success(true))
+                    } catch {
+                        self.sessionManagerChannel.invokeMethod("onError",
+                                                                arguments: ["Failed to load web USDZ model: \(error.localizedDescription)"])
+                        promise(.success(false))
+                    }
+                } else {
+                    self.sessionManagerChannel.invokeMethod("onError",
+                                                            arguments: ["Invalid URL for USDZ model: \(dict_node["uri"] as! String)"])
+                    promise(.success(false))
+                }
+                break
+            default:
+                promise(.success(false))
             }
-            
+
         }
+
     }
-    
+
     func transformNode(name: String, transform: Array<NSNumber>) {
         let node = sceneView.scene.rootNode.childNode(withName: name, recursively: true)
         node?.transform = deserializeMatrix4(transform)
     }
-    
+
     @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
         guard let sceneView = recognizer.view as? ARSCNView else {
             return
         }
         let touchLocation = recognizer.location(in: sceneView)
-    
-        let allHitResults = sceneView.hitTest(touchLocation, options: [SCNHitTestOption.searchMode : SCNHitTestSearchMode.closest.rawValue])
+
+        // ✅ 개선된 노드 터치 hitTest 처리
+        let allHitResults = sceneView.hitTest(
+            touchLocation,
+            options: [
+                .boundingBoxOnly: false,
+                .firstFoundOnly: false,
+                .searchMode: SCNHitTestSearchMode.closest.rawValue
+            ]
+        )
         // Because 3D model loading can lead to composed nodes, we have to traverse through a node's parent until the parent node with the name assigned by the Flutter API is found
-        let nodeHitResults: Array<String> = allHitResults.compactMap { nearestParentWithNameStart(node: $0.node, characters: "[#")?.name }
-        if (nodeHitResults.count != 0) {
-            self.objectManagerChannel.invokeMethod("onNodeTap", arguments: Array(Set(nodeHitResults))) // Chaining of Array and Set is used to remove duplicates
+        var nodeHitResults: Array<String> = allHitResults.compactMap { nearestParentWithNameStart(node: $0.node, characters: "[#")?.name ?? $0.node.name }
+        // ✅ child node 이름까지 인식되게 확장
+        if nodeHitResults.isEmpty {
+            for hit in allHitResults {
+                if let altName = hit.node.name {
+                    nodeHitResults.append(altName)
+                }
+            }
+        }
+
+        if !nodeHitResults.isEmpty {
+            nodeHitResults.forEach { print($0) }
+            self.objectManagerChannel.invokeMethod("onNodeTap", arguments: Array(Set(nodeHitResults)))
             return
         }
-            
+
         let planeTypes: ARHitTestResult.ResultType
         if #available(iOS 11.3, *){
             planeTypes = ARHitTestResult.ResultType([.existingPlaneUsingGeometry, .featurePoint])
         }else {
             planeTypes = ARHitTestResult.ResultType([.existingPlaneUsingExtent, .featurePoint])
         }
-        
+
         let planeAndPointHitResults = sceneView.hitTest(touchLocation, types: planeTypes)
-        
+
         // store the alignment of the tapped plane anchor so we can refer to is later when transforming the node
         if planeAndPointHitResults.count > 0, let hitAnchor = planeAndPointHitResults.first?.anchor as? ARPlaneAnchor {
             self.tappedPlaneAnchorAlignment = hitAnchor.alignment
         }
-            
+
         let serializedPlaneAndPointHitResults = planeAndPointHitResults.map{serializeHitResult($0)}
         if (serializedPlaneAndPointHitResults.count != 0) {
             self.sessionManagerChannel.invokeMethod("onPlaneOrPointTap", arguments: serializedPlaneAndPointHitResults)
@@ -653,7 +793,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             panningNode = nil
         }
     }
-    
+
     @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
         guard let sceneView = recognizer.view as? ARSCNView else {
             return
@@ -714,7 +854,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             self.objectManagerChannel.invokeMethod("onRotationEnd", arguments: serializeLocalTransformation(node: panningNode))
             panningNode = nil
         }
-    
+
     }
 
     // Recursive helper function to traverse a node's parents until a node with a name starting with the specified characters is found
@@ -725,7 +865,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
         if let parent = node?.parent { return nearestParentWithNameStart(node: parent, characters: characters) }
         return nil
     }
-    
+
     func addPlaneAnchor(transform: Array<NSNumber>, name: String){
         let arAnchor = ARAnchor(transform: simd_float4x4(deserializeMatrix4(transform)))
         anchorCollection[name] = arAnchor
@@ -736,7 +876,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             usleep(1) // wait 1 millionth of a second
         }
     }
-    
+
     func deleteAnchor(anchorName: String) {
         if let anchor = anchorCollection[anchorName]{
             // Delete all child nodes
@@ -749,14 +889,14 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             anchorCollection.removeValue(forKey: anchorName)
         }
     }
-    
+
     private class cloudAnchorUploadedListener: CloudAnchorListener {
         private var parent: IosARView
-        
+
         init(parent: IosARView) {
             self.parent = parent
         }
-        
+
         func onCloudTaskComplete(anchorName: String?, anchor: GARAnchor?) {
             if let cloudState = anchor?.cloudState {
                 if (cloudState == GARCloudAnchorState.success) {
@@ -775,11 +915,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
     private class cloudAnchorDownloadedListener: CloudAnchorListener {
         private var parent: IosARView
-        
+
         init(parent: IosARView) {
             self.parent = parent
         }
-        
+
         func onCloudTaskComplete(anchorName: String?, anchor: GARAnchor?) {
             if let cloudState = anchor?.cloudState {
                 if (cloudState == GARCloudAnchorState.success) {
@@ -802,7 +942,7 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             }
         }
     }
-    
+
     func decodeCloudAnchorState(state: GARCloudAnchorState) -> String {
         switch state {
         case .errorCloudIdNotFound:
@@ -835,34 +975,34 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             return "Unknown"
         }
     }
-    
+
     // MARK: - Image Tracking
-    
+
     func setupImageTracking(imagePaths: [String]) {
         var referenceImages = Set<ARReferenceImage>()
-        
+
         for imagePath in imagePaths {
             if let image = loadImageFromAssets(imagePath: imagePath) {
                 let imageName = URL(fileURLWithPath: imagePath).deletingPathExtension().lastPathComponent
-                
+
                 print("Loading image: \(imageName), size: \(image.size.width)x\(image.size.height)")
-                
+
                 // Create ARReferenceImage with a default physical width (you may want to make this configurable)
                 let physicalWidth: Float = 0.2 // 20cm default width - adjust based on your actual printed image size
                 let referenceImage = ARReferenceImage(image.cgImage!, orientation: .up, physicalWidth: CGFloat(physicalWidth))
                 referenceImage.name = imageName
-                
+
                 referenceImages.insert(referenceImage)
                 print("Successfully added reference image: \(imageName)")
             } else {
                 print("Failed to load image: \(imagePath)")
             }
         }
-        
+
         configuration.detectionImages = referenceImages
         print("🖼️ iOS Image tracking configured with \(referenceImages.count) images")
         print("Configuration detection images count: \(configuration.detectionImages?.count ?? 0)")
-        
+
         // Print details about each configured image
         if let detectionImages = configuration.detectionImages {
             for (index, refImage) in detectionImages.enumerated() {
@@ -870,26 +1010,28 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             }
         }
     }
-    
+
     func loadImageFromAssets(imagePath: String) -> UIImage? {
         let key = FlutterDartProject.lookupKey(forAsset: imagePath)
         return UIImage(named: key, in: Bundle.main, compatibleWith: nil)
     }
-    
+
     func handleImageDetection(imageAnchor: ARImageAnchor) {
         let imageName = imageAnchor.referenceImage.name ?? "unknown"
         let transformation = serializeMatrix(imageAnchor.transform)
-        
+
         print("🔍 iOS Image detected: \(imageName)")
         print("Transform: \(imageAnchor.transform)")
         print("Reference image size: \(imageAnchor.referenceImage.physicalSize)")
-        
+
         let arguments: [String: Any] = [
             "imageName": imageName,
             "transformation": transformation
         ]
-        
-        sessionManagerChannel.invokeMethod("onImageDetected", arguments: arguments)
+
+        DispatchQueue.main.async {
+            self.sessionManagerChannel.invokeMethod("onImageDetected", arguments: arguments)
+        }
         print("✅ Sent image detection to Flutter: \(imageName)")
     }
 }
@@ -897,11 +1039,11 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 // ---------------------- ARCoachingOverlayViewDelegate ---------------------------------------
 
 extension IosARView: ARCoachingOverlayViewDelegate {
-    
+
     func coachingOverlayViewWillActivate(_ coachingOverlayView: ARCoachingOverlayView){
         // use this delegate method to hide anything in the UI that could cover the coaching overlay view
     }
-    
+
     func coachingOverlayViewDidRequestSessionReset(_ coachingOverlayView: ARCoachingOverlayView) {
         // Reset the session.
         self.sceneView.session.run(configuration, options: [.resetTracking])
