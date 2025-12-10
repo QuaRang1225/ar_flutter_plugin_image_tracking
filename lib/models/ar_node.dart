@@ -118,7 +118,7 @@ class ARNode {
 /// Helper function to create a Matrix4 from either a given matrix or from position, scale and rotation relative to the origin
 Matrix4 createTransformMatrix(Matrix4? origin, Vector3? position,
     Vector3? scale, Vector4? rotation, Vector3? eulerAngles) {
-  final transform = origin ?? Matrix4.identity();
+  var transform = origin ?? Matrix4.identity();
 
   if (position != null) {
     transform.setTranslation(position);
@@ -131,9 +131,8 @@ Matrix4 createTransformMatrix(Matrix4? origin, Vector3? position,
     transform.matrixEulerAngles = eulerAngles;
   }
   if (scale != null) {
-    transform.scaledByVector3(scale);
-  } else {
-    transform.scaleByDouble(1.0, 1.0, 1.0, 1.0);
+    // scale을 Matrix4에 올바르게 적용
+    transform.scale(scale.x, scale.y, scale.z);
   }
   return transform;
 }
