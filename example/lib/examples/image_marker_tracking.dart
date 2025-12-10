@@ -26,6 +26,10 @@ class _ImageMarkerTrackingState extends State<ImageMarkerTracking> {
   ARAnchor? anchor;
   ARNode? node;
 
+  // 마커 이미지의 실제 크기 저장 (미터 단위)
+  double? markerPhysicalWidth;
+  double? markerPhysicalHeight;
+
   void onARViewCreated(
       ARSessionManager arSessionManager,
       ARObjectManager arObjectManager,
@@ -48,21 +52,41 @@ class _ImageMarkerTrackingState extends State<ImageMarkerTracking> {
     );
     this.arObjectManager!.onInitialize();
     this.arSessionManager!.onImageDetected = onImageDetected;
+    this.arSessionManager!.onImageLost = onImageLost;
   }
 
-  void onImageDetected(String imageName, Matrix4 transformation) {
+  void onImageDetected(String imageName, Matrix4 transformation, double physicalWidth, double physicalHeight) {
     print("Image detected: $imageName");
+    print("Physical size: ${physicalWidth}m x ${physicalHeight}m");
+
+    // 마커의 실제 크기 저장
+    markerPhysicalWidth = physicalWidth;
+    markerPhysicalHeight = physicalHeight;
 
     // Convert transformation matrix to position
     Vector3 position = transformation.getTranslation();
     print("Image '$imageName' detected at position: $position");
 
     // Automatically place an object on the detected image
-    placeObjectOnImage(imageName, transformation);
+    placeObjectOnImage(imageName, transformation, physicalWidth, physicalHeight);
+  }
+
+  void onImageLost(String imageName) {
+    print("Image lost: $imageName");
+
+    // 이미지가 사라지면 즉시 3D 노드 숨기기
+    if (node != null) {
+      arObjectManager?.removeNode(node!);
+      node = null;
+    }
+    if (anchor != null) {
+      arAnchorManager?.removeAnchor(anchor!);
+      anchor = null;
+    }
   }
 
   Future<void> placeObjectOnImage(
-      String imageName, Matrix4 transformation) async {
+      String imageName, Matrix4 transformation, double physicalWidth, double physicalHeight) async {
     try {
       // Create a new anchor at the image position
       var imageAnchor = ARPlaneAnchor(transformation: transformation);
@@ -81,29 +105,19 @@ class _ImageMarkerTrackingState extends State<ImageMarkerTracking> {
 
         var modelUrl = "Models/Chicken_01/Chicken_01.gltf";
 
-        // Create a 3D object to place on the image
-        double scale = 0.05;
+        // 마커 이미지의 실제 크기에 맞게 3D 모델 스케일 계산
+        // physicalWidth는 마커의 실제 너비 (미터 단위)
+        // 모델이 마커와 동일한 크기가 되도록 스케일 조정
+        // 기본 모델 크기를 1m로 가정하고, 마커 크기에 맞춰 스케일링
+        double baseModelSize = 1.0; // 모델의 기본 크기 (미터 단위, 필요시 조정)
+        double scale = physicalWidth / baseModelSize;
+
+        print("Marker physical width: ${physicalWidth}m, Model scale: $scale");
+
         var imageNode = ARNode(
           type: NodeType.localGLTF2,
           uri: modelUrl,
-          transformation: Matrix4(
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-            scale,
-          ),
+          scale: Vector3(scale, scale, scale),
           position: Vector3(0.0, 0.0, 0.0),
           rotation: Vector4(1.0, 0.0, 0.0, 0.0),
         );
@@ -113,7 +127,7 @@ class _ImageMarkerTrackingState extends State<ImageMarkerTracking> {
 
         if (didAddNodeToAnchor == true) {
           node = imageNode;
-          print("Successfully placed object on image: $imageName");
+          print("Successfully placed object on image: $imageName with scale: $scale");
         } else {
           //arSessionManager!.onError("Adding Node to Image Anchor failed");
         }
