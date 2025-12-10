@@ -35,6 +35,9 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     private var panningNode: SCNNode?
     private var panningNodeCurrentWorldLocation: SCNVector3?
 
+    // Image tracking state
+    private var trackedImageStates = [String: Bool]()  // imageName -> isTracked
+
     init(
         frame: CGRect,
         viewIdentifier viewId: Int64,
@@ -337,8 +340,12 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
             }
         }
 
-        // Configure image tracking
-        if let trackingImagePaths = arguments["trackingImagePaths"] as? [String] {
+        // Configure image tracking - support both legacy and new format
+        if let trackingImages = arguments["trackingImages"] as? [[String: Any]] {
+            // New format with physical size: [{"path": "...", "physicalWidth": 0.1}, ...]
+            setupImageTrackingWithConfigs(imageConfigs: trackingImages)
+        } else if let trackingImagePaths = arguments["trackingImagePaths"] as? [String] {
+            // Legacy format - just paths with default physical size
             setupImageTracking(imagePaths: trackingImagePaths)
         }
 
@@ -359,6 +366,8 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
         // Handle image anchors
         if let imageAnchor = anchor as? ARImageAnchor {
+            let imageName = imageAnchor.referenceImage.name ?? "unknown"
+            trackedImageStates[imageName] = true
             print("🖼️ iOS: Image anchor added!")
             handleImageDetection(imageAnchor: imageAnchor)
         }
@@ -368,6 +377,28 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
         if let planeAnchor = anchor as? ARPlaneAnchor, let plane = trackedPlanes[anchor.identifier] {
             modelBuilder.updatePlaneNode(planeNode: plane.1, anchor: planeAnchor)
+        }
+
+        // Handle image anchor tracking state changes
+        if let imageAnchor = anchor as? ARImageAnchor {
+            let imageName = imageAnchor.referenceImage.name ?? "unknown"
+            let isCurrentlyTracked = imageAnchor.isTracked
+            let wasTracked = trackedImageStates[imageName] ?? false
+
+            if isCurrentlyTracked && !wasTracked {
+                // Image re-detected (was lost, now found again)
+                trackedImageStates[imageName] = true
+                handleImageDetection(imageAnchor: imageAnchor)
+                print("🖼️ iOS: Image re-detected: \(imageName)")
+            } else if !isCurrentlyTracked && wasTracked {
+                // Image lost
+                trackedImageStates[imageName] = false
+                handleImageLost(imageName: imageName)
+                print("🖼️ iOS: Image lost: \(imageName)")
+            } else if isCurrentlyTracked {
+                // Image still being tracked - update position
+                handleImageUpdate(imageAnchor: imageAnchor)
+            }
         }
     }
 
@@ -978,6 +1009,38 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
 
     // MARK: - Image Tracking
 
+    func setupImageTrackingWithConfigs(imageConfigs: [[String: Any]]) {
+        var referenceImages = Set<ARReferenceImage>()
+
+        for config in imageConfigs {
+            guard let imagePath = config["path"] as? String else { continue }
+            let physicalWidth = (config["physicalWidth"] as? Double) ?? 0.2
+
+            if let image = loadImageFromAssets(imagePath: imagePath) {
+                let imageName = URL(fileURLWithPath: imagePath).deletingPathExtension().lastPathComponent
+
+                print("Loading image: \(imageName), size: \(image.size.width)x\(image.size.height), physicalWidth: \(physicalWidth)m")
+
+                let referenceImage = ARReferenceImage(image.cgImage!, orientation: .up, physicalWidth: CGFloat(physicalWidth))
+                referenceImage.name = imageName
+
+                referenceImages.insert(referenceImage)
+                print("Successfully added reference image: \(imageName) with physical width: \(physicalWidth)m")
+            } else {
+                print("Failed to load image: \(imagePath)")
+            }
+        }
+
+        configuration.detectionImages = referenceImages
+        print("🖼️ iOS Image tracking configured with \(referenceImages.count) images (with custom sizes)")
+
+        if let detectionImages = configuration.detectionImages {
+            for (index, refImage) in detectionImages.enumerated() {
+                print("  Image \(index + 1): '\(refImage.name ?? "unnamed")' - \(refImage.physicalSize.width)m x \(refImage.physicalSize.height)m")
+            }
+        }
+    }
+
     func setupImageTracking(imagePaths: [String]) {
         var referenceImages = Set<ARReferenceImage>()
 
@@ -1019,20 +1082,51 @@ class IosARView: NSObject, FlutterPlatformView, ARSCNViewDelegate, UIGestureReco
     func handleImageDetection(imageAnchor: ARImageAnchor) {
         let imageName = imageAnchor.referenceImage.name ?? "unknown"
         let transformation = serializeMatrix(imageAnchor.transform)
+        let physicalSize = imageAnchor.referenceImage.physicalSize
 
         print("🔍 iOS Image detected: \(imageName)")
         print("Transform: \(imageAnchor.transform)")
-        print("Reference image size: \(imageAnchor.referenceImage.physicalSize)")
+        print("Reference image size: \(physicalSize)")
 
         let arguments: [String: Any] = [
             "imageName": imageName,
-            "transformation": transformation
+            "transformation": transformation,
+            "physicalWidth": physicalSize.width,
+            "physicalHeight": physicalSize.height
         ]
 
         DispatchQueue.main.async {
             self.sessionManagerChannel.invokeMethod("onImageDetected", arguments: arguments)
         }
         print("✅ Sent image detection to Flutter: \(imageName)")
+    }
+
+    func handleImageLost(imageName: String) {
+        let arguments: [String: Any] = [
+            "imageName": imageName
+        ]
+
+        DispatchQueue.main.async {
+            self.sessionManagerChannel.invokeMethod("onImageLost", arguments: arguments)
+        }
+        print("✅ Sent image lost to Flutter: \(imageName)")
+    }
+
+    func handleImageUpdate(imageAnchor: ARImageAnchor) {
+        let imageName = imageAnchor.referenceImage.name ?? "unknown"
+        let transformation = serializeMatrix(imageAnchor.transform)
+        let physicalSize = imageAnchor.referenceImage.physicalSize
+
+        let arguments: [String: Any] = [
+            "imageName": imageName,
+            "transformation": transformation,
+            "physicalWidth": physicalSize.width,
+            "physicalHeight": physicalSize.height
+        ]
+
+        DispatchQueue.main.async {
+            self.sessionManagerChannel.invokeMethod("onImageUpdated", arguments: arguments)
+        }
     }
 }
 
