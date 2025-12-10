@@ -10,7 +10,18 @@ import 'package:vector_math/vector_math_64.dart';
 // Type definitions to enforce a consistent use of the API
 typedef ARHitResultHandler = void Function(List<ARHitTestResult> hits);
 typedef ARImageDetectionResultHandler = void Function(
-    String imageName, Matrix4 transformation);
+    String imageName,
+    Matrix4 transformation,
+    double physicalWidth,
+    double physicalHeight,
+);
+typedef ARImageLostHandler = void Function(String imageName);
+typedef ARImageUpdatedHandler = void Function(
+    String imageName,
+    Matrix4 transformation,
+    double physicalWidth,
+    double physicalHeight,
+);
 
 /// Manages the session configuration, parameters and events of an [ARView]
 class ARSessionManager {
@@ -31,6 +42,12 @@ class ARSessionManager {
 
   /// Receives detection results when tracked images are detected
   ARImageDetectionResultHandler? onImageDetected;
+
+  /// Receives notification when a tracked image is lost (no longer visible)
+  ARImageLostHandler? onImageLost;
+
+  /// Receives updated position/pose when a tracked image moves
+  ARImageUpdatedHandler? onImageUpdated;
 
   ARSessionManager(int id, this.buildContext, this.planeDetectionConfig,
       {this.debug = false}) {
@@ -132,7 +149,33 @@ class ARSessionManager {
             final imageName = arguments['imageName'] as String;
             final transformation = MatrixConverter()
                 .fromJson(arguments['transformation'] as List<dynamic>);
-            onImageDetected!(imageName, transformation);
+            final physicalWidth =
+                (arguments['physicalWidth'] as num?)?.toDouble() ?? 0.0;
+            final physicalHeight =
+                (arguments['physicalHeight'] as num?)?.toDouble() ?? 0.0;
+            onImageDetected!(
+                imageName, transformation, physicalWidth, physicalHeight);
+          }
+          break;
+        case 'onImageLost':
+          if (onImageLost != null) {
+            final arguments = call.arguments as Map<dynamic, dynamic>;
+            final imageName = arguments['imageName'] as String;
+            onImageLost!(imageName);
+          }
+          break;
+        case 'onImageUpdated':
+          if (onImageUpdated != null) {
+            final arguments = call.arguments as Map<dynamic, dynamic>;
+            final imageName = arguments['imageName'] as String;
+            final transformation = MatrixConverter()
+                .fromJson(arguments['transformation'] as List<dynamic>);
+            final physicalWidth =
+                (arguments['physicalWidth'] as num?)?.toDouble() ?? 0.0;
+            final physicalHeight =
+                (arguments['physicalHeight'] as num?)?.toDouble() ?? 0.0;
+            onImageUpdated!(
+                imageName, transformation, physicalWidth, physicalHeight);
           }
           break;
         case 'dispose':
