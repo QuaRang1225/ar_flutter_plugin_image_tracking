@@ -91,6 +91,9 @@ internal class AndroidARView(
     private lateinit var sceneUpdateListener: com.google.ar.sceneform.Scene.OnUpdateListener
     private lateinit var onNodeTapListener: com.google.ar.sceneform.Scene.OnPeekTouchListener
 
+    // Image tracking state
+    private val trackedImageStates = mutableMapOf<String, Boolean>()  // imageName -> isTracked
+
     // Method channel handlers
     private val onSessionMethodCall =
             object : MethodChannel.MethodCallHandler {
@@ -476,6 +479,8 @@ internal class AndroidARView(
         val argHandlePans: Boolean? = call.argument<Boolean>("handlePans")
         val argShowAnimatedGuide: Boolean? = call.argument<Boolean>("showAnimatedGuide")
         val argTrackingImagePaths: List<String>? = call.argument<List<String>>("trackingImagePaths")
+        @Suppress("UNCHECKED_CAST")
+        val argTrackingImages: List<Map<String, Any>>? = call.argument<List<Map<String, Any>>>("trackingImages")
 
 
         sceneUpdateListener = com.google.ar.sceneform.Scene.OnUpdateListener {
@@ -542,9 +547,15 @@ internal class AndroidARView(
         }
         arSceneView.session?.configure(config)
 
-        // Configure image tracking
-        argTrackingImagePaths?.let { imagePaths ->
-            setupImageTracking(imagePaths)
+        // Configure image tracking - support both legacy and new format
+        if (argTrackingImages != null) {
+            // New format with physical size: [{"path": "...", "physicalWidth": 0.1}, ...]
+            setupImageTrackingWithConfigs(argTrackingImages)
+        } else {
+            argTrackingImagePaths?.let { imagePaths ->
+                // Legacy format - just paths with default physical size
+                setupImageTracking(imagePaths)
+            }
         }
 
         // Configure whether or not detected planes should be shown
@@ -969,48 +980,140 @@ internal class AndroidARView(
 
     private fun checkForTrackedImages() {
         val frame = arSceneView.arFrame ?: return
-        
+
         // Get all tracked images
         val updatedAugmentedImages = frame.getUpdatedTrackables(AugmentedImage::class.java)
-        
+
         // Debug: Log how many images we're checking
         if (updatedAugmentedImages.isNotEmpty()) {
             Log.d(TAG, "Checking ${updatedAugmentedImages.size} augmented images")
         }
-        
+
         for (augmentedImage in updatedAugmentedImages) {
-            when (augmentedImage.trackingState) {
-                TrackingState.TRACKING -> {
-                    // Additional check: Only proceed if the image has a valid tracking method
-                    // and the tracking confidence is sufficient
-                    if (augmentedImage.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING) {
-                        // Image is currently being tracked with full tracking
-                        val imageName = augmentedImage.name ?: "unknown"
-                        val centerPose = augmentedImage.centerPose
-                        
-                        // Convert pose to transformation matrix and send to Flutter
-                        val transformation = serializePose(centerPose)
-                        
-                        val arguments = HashMap<String, Any>()
-                        arguments["imageName"] = imageName
-                        arguments["transformation"] = transformation
-                        
-                        sessionManagerChannel.invokeMethod("onImageDetected", arguments)
-                        
-                        Log.d(TAG, "Image detected with full tracking: $imageName")
-                    } else {
-                        Log.d(TAG, "Image tracking method not full: ${augmentedImage.name} - ${augmentedImage.trackingMethod}")
-                    }
+            val imageName = augmentedImage.name ?: "unknown"
+            val wasTracked = trackedImageStates[imageName] ?: false
+            val isFullTracking = augmentedImage.trackingState == TrackingState.TRACKING &&
+                                 augmentedImage.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING
+
+            when {
+                isFullTracking && !wasTracked -> {
+                    // Image newly detected or re-detected
+                    trackedImageStates[imageName] = true
+                    sendImageDetectedEvent(augmentedImage)
+                    Log.d(TAG, "🖼️ Android: Image detected: $imageName")
                 }
-                TrackingState.PAUSED -> {
-                    // Image was tracked but is now paused (e.g., moved out of view)
-                    Log.d(TAG, "Image tracking paused: ${augmentedImage.name}")
+                isFullTracking && wasTracked -> {
+                    // Image still being tracked - send update
+                    sendImageUpdatedEvent(augmentedImage)
                 }
-                TrackingState.STOPPED -> {
-                    // Image tracking stopped
-                    Log.d(TAG, "Image tracking stopped: ${augmentedImage.name}")
+                !isFullTracking && wasTracked -> {
+                    // Image lost (was tracked but no longer full tracking)
+                    trackedImageStates[imageName] = false
+                    sendImageLostEvent(imageName)
+                    Log.d(TAG, "🖼️ Android: Image lost: $imageName")
                 }
             }
+        }
+    }
+
+    private fun sendImageDetectedEvent(augmentedImage: AugmentedImage) {
+        val imageName = augmentedImage.name ?: "unknown"
+        val centerPose = augmentedImage.centerPose
+        val transformation = serializePose(centerPose)
+
+        val arguments = HashMap<String, Any>()
+        arguments["imageName"] = imageName
+        arguments["transformation"] = transformation
+        arguments["physicalWidth"] = augmentedImage.extentX.toDouble()
+        arguments["physicalHeight"] = augmentedImage.extentZ.toDouble()
+
+        sessionManagerChannel.invokeMethod("onImageDetected", arguments)
+    }
+
+    private fun sendImageUpdatedEvent(augmentedImage: AugmentedImage) {
+        val imageName = augmentedImage.name ?: "unknown"
+        val centerPose = augmentedImage.centerPose
+        val transformation = serializePose(centerPose)
+
+        val arguments = HashMap<String, Any>()
+        arguments["imageName"] = imageName
+        arguments["transformation"] = transformation
+        arguments["physicalWidth"] = augmentedImage.extentX.toDouble()
+        arguments["physicalHeight"] = augmentedImage.extentZ.toDouble()
+
+        sessionManagerChannel.invokeMethod("onImageUpdated", arguments)
+    }
+
+    private fun sendImageLostEvent(imageName: String) {
+        val arguments = HashMap<String, Any>()
+        arguments["imageName"] = imageName
+
+        sessionManagerChannel.invokeMethod("onImageLost", arguments)
+    }
+
+    private fun setupImageTrackingWithConfigs(imageConfigs: List<Map<String, Any>>) {
+        try {
+            val session = arSceneView.session ?: return
+            val config = session.config
+
+            // Create AugmentedImageDatabase
+            val imageDatabase = AugmentedImageDatabase(session)
+
+            for (imageConfig in imageConfigs) {
+                try {
+                    val imagePath = imageConfig["path"] as? String ?: continue
+                    val physicalWidth = (imageConfig["physicalWidth"] as? Double)?.toFloat() ?: 0.2f
+
+                    // Get path to given Flutter asset
+                    val loader = FlutterInjector.instance().flutterLoader()
+                    val key = loader.getLookupKeyForAsset(imagePath)
+
+                    Log.d(TAG, "🔍 Loading image - Original path: $imagePath, physicalWidth: ${physicalWidth}m")
+                    Log.d(TAG, "🔍 Loading image - Asset key: $key")
+
+                    // Load bitmap from assets
+                    val inputStream = viewContext.assets.open(key)
+                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                    inputStream.close()
+
+                    if (bitmap != null) {
+                        // Extract name from path (remove extension and path)
+                        val imageName = imagePath.substringAfterLast("/").substringBeforeLast(".")
+
+                        Log.d(TAG, "Loading image: $imageName, size: ${bitmap.width}x${bitmap.height}, physicalWidth: ${physicalWidth}m")
+
+                        val index = imageDatabase.addImage(imageName, bitmap, physicalWidth)
+
+                        if (index != -1) {
+                            Log.d(TAG, "Successfully added image to database: $imageName (index: $index) with physical width: ${physicalWidth}m")
+                        } else {
+                            Log.e(TAG, "Failed to add image to database: $imageName")
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to load bitmap for: $imagePath")
+                    }
+                } catch (e: Exception) {
+                    when (e.javaClass.simpleName) {
+                        "ImageInsufficientQualityException" -> {
+                            val imagePath = imageConfig["path"] as? String ?: "unknown"
+                            Log.e(TAG, "❌ Image $imagePath has insufficient quality for AR tracking!")
+                            sessionManagerChannel.invokeMethod("onError", listOf("Image '$imagePath' has insufficient quality for AR tracking."))
+                        }
+                        else -> {
+                            Log.e(TAG, "Error loading image: ${e.message}")
+                        }
+                    }
+                    e.printStackTrace()
+                }
+            }
+
+            config.augmentedImageDatabase = imageDatabase
+            session.configure(config)
+            Log.d(TAG, "🖼️ Android Image tracking configured with ${imageConfigs.size} images (with custom sizes)")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up image tracking: ${e.message}")
+            sessionManagerChannel.invokeMethod("onError", listOf("Error setting up image tracking: ${e.message}"))
         }
     }
 
