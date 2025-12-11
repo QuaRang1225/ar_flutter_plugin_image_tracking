@@ -205,6 +205,7 @@ class ARSessionManager {
     bool handlePans = false, // nodes are not draggable by default
     bool handleRotation = false, // nodes can not be rotated by default
     List<String>? trackingImagePaths,
+    List<Map<String, dynamic>>? trackingImages,
   }) {
     _channel.invokeMethod<void>('init', {
       'showAnimatedGuide': showAnimatedGuide,
@@ -217,6 +218,7 @@ class ARSessionManager {
       'handlePans': handlePans,
       'handleRotation': handleRotation,
       'trackingImagePaths': trackingImagePaths,
+      'trackingImages': trackingImages,
     });
   }
 
